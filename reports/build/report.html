@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Catching Shrinkage: What the Experiment Found</title>
+<style>
+  @page { size: A4; margin: 18mm 17mm 18mm 17mm; }
+  :root { --ink:#1f2328; --ink2:#5a6773; --rule:#dfe3e8; --teal:#0f7c86; --tealbg:#e6f3f4; --pink:#a3245f; --pinkbg:#fbeff5; --navy:#1b2a3c; --amber:#8a5a00; --amberbg:#fdf3dc; }
+  * { box-sizing: border-box; }
+  body { font-family: "Helvetica Neue", Arial, sans-serif; color: var(--ink); font-size: 10.6pt; line-height: 1.5; margin: 0; background:#fff; }
+  h1, h2, h3 { font-family: Georgia, "Times New Roman", serif; color: var(--navy); line-height: 1.2; }
+  h1 { font-size: 25pt; margin: 0 0 6px; }
+  h2 { font-size: 16pt; margin: 26px 0 8px; padding-top: 6px; border-top: 2px solid var(--navy); }
+  h3 { font-size: 12.2pt; margin: 16px 0 4px; }
+  p { margin: 0 0 8px; }
+  .sub { color: var(--ink2); font-size: 11.5pt; margin-bottom: 10px; }
+  .team { color: var(--ink2); font-size: 9.5pt; margin-bottom: 16px; }
+  .box { border-radius: 6px; padding: 10px 14px; margin: 10px 0; break-inside: avoid; }
+  .teal { background: var(--tealbg); }
+  .pink { background: var(--pinkbg); }
+  .amber { background: var(--amberbg); }
+  .box b.lab { display:block; font-size: 10.5pt; margin-bottom: 3px; }
+  .teal b.lab { color: var(--teal); } .pink b.lab { color: var(--pink); } .amber b.lab { color: var(--amber); }
+  .tldr { background: var(--navy); color: #eef2f6; border-radius: 6px; padding: 12px 16px; margin: 8px 0 14px; }
+  .tldr b { color: #fff; } .tldr ul { margin: 4px 0 0 18px; padding: 0; } .tldr li { margin-bottom: 3px; }
+  figure { margin: 10px 0 12px; break-inside: avoid; }
+  figure img { width: 100%; display: block; }
+  figcaption { color: var(--ink2); font-size: 9pt; margin-top: 4px; }
+  table { border-collapse: collapse; width: 100%; font-size: 9.6pt; margin: 6px 0 10px; break-inside: avoid; }
+  th { background: var(--navy); color: #fff; text-align: left; padding: 5px 8px; font-weight: 600; }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  .num { font-variant-numeric: tabular-nums; }
+  .flow { display: flex; gap: 6px; align-items: stretch; margin: 10px 0 12px; break-inside: avoid; }
+  .flow .st { flex: 1; background: var(--tealbg); border-radius: 6px; padding: 8px 10px; font-size: 9.4pt; }
+  .flow .st.hl { background: var(--pinkbg); }
+  .flow .st b { display: block; color: var(--teal); font-size: 10pt; margin-bottom: 2px; }
+  .flow .st.hl b { color: var(--pink); }
+  .flow .ar { align-self: center; color: var(--ink2); font-size: 15pt; }
+  .stat { display: flex; gap: 12px; margin: 8px 0; break-inside: avoid; }
+  .stat div { flex: 1; border: 1px solid var(--rule); border-radius: 6px; padding: 8px 10px; }
+  .stat .big { font-family: Georgia, serif; font-size: 22pt; color: var(--teal); line-height: 1.1; }
+  .stat small { color: var(--ink2); font-size: 9pt; display: block; }
+  ul, ol { margin: 4px 0 8px 20px; padding: 0; } li { margin-bottom: 3px; }
+  .pb { break-before: page; }
+  h2, h3 { break-after: avoid; page-break-after: avoid; }
+  h3 + p, h3 + .flow, h3 + figure { break-before: avoid; }
+  .grade td:first-child { width: 34%; font-weight: 600; }
+  .muted { color: var(--ink2); font-size: 9pt; }
+</style>
+</head>
+<body>
+
+<h1>Catching Shrinkage in Causal Foundation Models</h1>
+<div class="sub">What the experiment did, what it found, and an honest review of where it stands</div>
+<div class="team">Chiranth R (PES1UG24AM354) · Vihaan Wadhwa (PES1UG24AM319) · Krish Mathur (PES1UG24AM914) · P Saanvi (PES1UG24AM905) · November 2026</div>
+
+<div class="tldr">
+<b>The short version</b>
+<ul>
+  <li>We asked whether CausalPFN, an AI model that estimates treatment effects in one shot, reports large effects as too small (“shrinkage”).</li>
+  <li><b>It does not, on our simulated data.</b> For every true effect of 4 or more, all 960 runs at those sizes were within 10% of the truth, and at an effect of 128 they were within 1.1%.</li>
+  <li><b>The reason is how it is built:</b> it rescales the data before the network sees it, so the size of the effect never passes through the part that could shrink it.</li>
+  <li><b>Its real weak spot is small effects.</b> At an effect of 1, 42% of runs were more than 10% off, and mostly too <i>large</i>, not too small.</li>
+  <li><b>The bigger surprise:</b> the classic method we used as the trusted ruler (AIPW) was the main source of error, and the obvious sanity checks prove nothing for this model. We built tests that avoid both traps.</li>
+</ul>
+</div>
+
+<h2>1. The question, in plain words</h2>
+<p><b>Treatment effect.</b> We want to know how much a treatment changes an outcome on average, for example how much a training course raises salary. This average is called the <b>ATE</b> (average treatment effect).</p>
+<p><b>Confounding.</b> In real (observational) data, the people who get treated are different from those who don't. If motivated people both take the course and earn more, a plain comparison of the two groups mixes the course's effect with motivation. That plain comparison is the <b>naive difference</b>, and it is biased.</p>
+<p><b>Two ways to correct for it:</b></p>
+<table>
+<tr><th style="width:22%">Method</th><th>How it works</th><th style="width:28%">Strength / weakness</th></tr>
+<tr><td><b>AIPW</b> (classical)</td><td>Fits two models: one predicts the outcome, one predicts who gets treated (the <b>propensity</b>). Combines them so either can fix the other's mistakes.</td><td>Comes with a proven error bar (standard error). Slower: many model fits per dataset.</td></tr>
+<tr><td><b>CausalPFN</b> (foundation model)</td><td>A transformer pre-trained on millions of simulated datasets. Reads your whole dataset and outputs the effect in one GPU pass, with no tuning.</td><td>Fast and easy. But no guaranteed error bar, and nobody can see why it gives a number.</td></tr>
+</table>
+<p><b>The worry: shrinkage.</b> A model that learned mostly from small effects might pull a large real effect back toward the sizes it is used to, such as reporting 100 when the truth is 128. On real data the truth is unknown, so nobody would notice. Our project asked: <b>can a cheap check catch this?</b></p>
+
+<h2>2. How the experiment works</h2>
+<p>To know whether an answer is right, you need data where the right answer is known. So we <b>simulate</b> data with a true effect that we choose, then see how close each method gets.</p>
+<div class="flow">
+  <div class="st"><b>1 · Simulate</b>People with 6 features. Treatment depends on the features (confounding). Outcome = baseline + true effect.</div><div class="ar">→</div>
+  <div class="st"><b>2 · Estimate</b>Run CausalPFN (on a T4 GPU) and AIPW (on CPU) on the same data.</div><div class="ar">→</div>
+  <div class="st hl"><b>3 · Detect</b>A statistical test asks: is CausalPFN closer to zero than AIPW by more than noise explains?</div><div class="ar">→</div>
+  <div class="st"><b>4 · Grade</b>Compare against the known truth: was it really shrunk? Did the test catch it? False alarm?</div>
+</div>
+<p><b>What we varied</b> (round 4, the final run):</p>
+<ul>
+  <li><b>4 simulators</b>, each with a different kind of confounding: <i>Original</i> (from rounds 1–3), <i>Effect tied to a confounder</i>, <i>Flipped</i> (naive answer too low instead of too high), and <i>Scaled</i> (confounding grows as the effect grows, so skipping adjustment stays badly wrong even for huge effects).</li>
+  <li><b>6 effect sizes:</b> 1, 2, 4, 8, 32, 128. <b>2 sample sizes:</b> 500 and 2,000 people. <b>30 random repeats</b> each.</li>
+  <li>Total: <b>1,440 datasets</b> on the real CausalPFN, plus about 30,000 control runs on the CPU (section 5).</li>
+</ul>
+<div class="box amber"><b class="lab">Why there was a “round 4”</b>
+Rounds 1–3 used only the Original simulator. A design review showed that test <b>could not fail</b>: on that simulator the confounding bias stays fixed while the effect grows, so at effect 128 even the naive answer is only 0.5% wrong. Any model would look fine. The Scaled simulator was added specifically so that big effects stay hard (there, the naive answer is 48% wrong at effect 128).</div>
+
+<h2>3. What it found</h2>
+
+<h3>Finding 1: CausalPFN does not shrink large effects</h3>
+<figure>
+  <img src="fig1_error.png" alt="Two line charts. Left: CausalPFN's mean signed error stays inside ±10% for every simulator and effect size, shrinking from about 9% at effect 1 to under 1% at effect 128. Right: the naive difference ranges from +89% to −89%, and on the Scaled simulator stays near −48% at large effects.">
+  <figcaption>Average error of each method, as a % of the true effect (0 = perfect, below 0 = too small). Left: CausalPFN. Right: the naive difference, for comparison. Note the different vertical scales. 60 runs per point.</figcaption>
+</figure>
+<div class="stat">
+  <div><span class="big">0 of 960</span><small>runs more than 10% off at true effects of 4, 8, 32 and 128 (all four simulators)</small></div>
+  <div><span class="big">1.1%</span><small>largest error of any run at effect 128. Truth 128 → every answer between 126.6 and 129.4</small></div>
+  <div><span class="big">48%</span><small>how wrong the naive answer is at effect 128 on the Scaled simulator, which CausalPFN fixes</small></div>
+</div>
+<p><b>How to read this:</b> if CausalPFN shrank big effects, its line on the left would dip below zero on the right-hand side of the chart. Instead all four lines go <i>toward</i> zero error as effects grow. And this is real correction, not luck: on the Scaled simulator the naive answer is wrong by nearly half, and CausalPFN still lands within about 1%.</p>
+
+<h3>Finding 2: its errors are at small effects, and mostly in the other direction</h3>
+<table>
+<tr><th>True effect</th><th class="num">1</th><th class="num">2</th><th class="num">4</th><th class="num">8</th><th class="num">32</th><th class="num">128</th></tr>
+<tr><td>Runs more than 10% off</td><td class="num"><b>42%</b></td><td class="num">7%</td><td class="num">0%</td><td class="num">0%</td><td class="num">0%</td><td class="num">0%</td></tr>
+<tr><td>Largest error of any run</td><td class="num">28%</td><td class="num">14%</td><td class="num">7%</td><td class="num">4%</td><td class="num">2%</td><td class="num">1.1%</td></tr>
+</table>
+<p>Of all 1,440 runs, <b>100 were more than 10% too large</b> and only <b>18 were more than 10% too small</b> (all 18 at effects 1–2). The errors follow the naive answer: where the naive answer is too high (three simulators), CausalPFN is a bit too high; where it is too low (Flipped), CausalPFN is a bit too low. In other words, CausalPFN <b>corrects for confounding most of the way, but not all of the way</b>. When the effect is small, that leftover is a large share of the answer.</p>
+
+<h3>Finding 3: why it behaves this way</h3>
+<p>Reading the CausalPFN source code (version 0.1.5) explains both findings. Before the network sees anything, it rescales each group separately:</p>
+<div class="flow">
+  <div class="st"><b>Raw data</b>Treated average 140, untreated 12 (illustrative). The gap is the effect plus confounding.</div><div class="ar">→</div>
+  <div class="st"><b>Rescale each group</b>Subtract each group's average, divide by its spread. Every dataset now looks the same size.</div><div class="ar">→</div>
+  <div class="st hl"><b>Network corrects</b>The transformer works only on rescaled numbers and corrects confounding. The only learned step.</div><div class="ar">→</div>
+  <div class="st"><b>Scale back</b>Multiply by the spread, add the averages back. Real units return by plain arithmetic.</div>
+</div>
+<ul>
+  <li><b>Why big effects can't shrink:</b> the network never sees how big the effect is in real units. An effect of 128 looks the same to it as an effect of 1, so it has nothing to pull toward zero.</li>
+  <li><b>Why small effects have errors:</b> all error comes from the correction step. It removes about 96% of the confounding (Finding 5), and the leftover matters most when the effect itself is small.</li>
+  <li><b>With no information at all,</b> it falls back to the naive difference, not to zero. So the failure it actually has is “not adjusting enough”, which is the opposite of what our test was looking for.</li>
+</ul>
+
+<h3>Finding 4: the obvious sanity checks test nothing</h3>
+<table>
+<tr><th>Change to the data</th><th>A correct model must answer</th><th>CausalPFN</th></tr>
+<tr><td>Multiply every outcome by 10</td><td>10 × the original answer (5.0 → 50.0)</td><td>Exact</td></tr>
+<tr><td>Add 100 to every outcome</td><td>The same answer</td><td>Exact</td></tr>
+<tr><td>Add 1, 8 or 64 to treated people only</td><td>Answer + 1, 8 or 64</td><td>Exact</td></tr>
+</table>
+<p>Across 40 datasets the largest deviation was <b>0.0000</b>. That sounds like great news, but it isn't: the rescaling step undoes these changes by arithmetic, so the network never has to do anything. <b>Passing these checks says nothing about whether the model handles confounding.</b> This also explains why our round 1–3 test could not fail. A useful check has to add effects that differ from person to person, which led to Finding 5.</p>
+
+<h3>Finding 5: a self-test that needs no reference and no ground truth</h3>
+<p><b>Idea:</b> take the user's own dataset. To treated people only, add an extra amount that depends on a confounder (bigger for people with a high value of feature 1), centred so the true average effect does not change. This creates new confounding of a known size.</p>
+<ul>
+  <li>A model that fully adjusts gives the <b>same answer as before</b> (100% of the planted bias removed).</li>
+  <li>A model that does not adjust moves by the full naive shift (0% removed).</li>
+</ul>
+<figure>
+  <img src="fig3_plant.png" alt="Dot plot of the share of planted bias removed: no adjustment 0%, CausalPFN 96%, T-learner 96%, AIPW 101%.">
+  <figcaption>Share of planted confounding each method removes. Dot = median, bar = middle 80% of runs. CausalPFN: 80 datasets on the GPU. T-learner and AIPW: 800 datasets each on CPU.</figcaption>
+</figure>
+<p>The test gives the right answer on methods we understand (naive 0%, AIPW about 100%) and shows CausalPFN removes about 96%, which matches Finding 2. Its value is that it <b>runs on real data</b>, where the true effect is unknown.</p>
+
+<h3>Finding 6: the trusted ruler was the weak link</h3>
+<p>Our detector compares CausalPFN with AIPW. That only works if AIPW is right. It wasn't:</p>
+<table>
+<tr><th>AIPW's propensity model (who gets treated)</th><th>AIPW error at effect 1, n = 500</th></tr>
+<tr><td>Boosted trees (used in rounds 1–4)</td><td><b style="color:var(--pink)">−46.5%</b></td></tr>
+<tr><td>The true propensities (a check only possible in simulation)</td><td>+1.4%</td></tr>
+<tr><td>Degree-2 logistic regression (adopted)</td><td>Wide but honest error bars; −0.6% at n = 2,000</td></tr>
+</table>
+<p>The boosted trees were overconfident, predicting treatment chances as low as 0.003 where the truth was above 0.03. AIPW divides by these numbers, so tiny mistakes blew up. Fixing it:</p>
+<ul>
+  <li>raised AIPW's error-bar coverage from 96.5% to 99.2%, and cut datasets where the test refused to answer (“abstained”) from <b>10% to 0%</b>;</li>
+  <li>cut false shrinkage flags on the real CausalPFN from <b>3.4% to 1.2%</b> (z-test) and <b>0.8% to 0.3%</b> (margin test).</li>
+</ul>
+<div class="box amber"><b class="lab">Caveat</b>A degree-2 logistic model happens to match how our simulator assigns treatment, which flatters it. On real data a generic model may not do as well.</div>
+
+<h3>Finding 7: which detector to trust</h3>
+<p>To test the tests, we used a stand-in model that we shrink by a known amount (0% to 50%) and counted how often each test raised a flag. Shrinkage up to 10% is treated as “acceptable” and should be flagged at most 5% of the time.</p>
+<figure>
+  <img src="fig4_detectors.png" alt="Line chart of the share of runs flagged versus planted shrinkage for three tests. The round 3 z-test flags 60% at 10% shrinkage; the margin test stays at 1.5%; the rectifier test reaches 11.7%. At 20% shrinkage the rates are 72.5%, 62% and 77.9%.">
+  <figcaption>Share of runs flagged as shrunk, by planted shrinkage. Shaded area = should not be flagged. Pooled over effects 1–128 and both sample sizes (29,400 runs).</figcaption>
+</figure>
+<table>
+<tr><th>Test</th><th>What it asks</th><th class="num">At 10% (should be ≤5%)</th><th class="num">At 20%</th><th>Verdict</th></tr>
+<tr><td>Round 3 z-test</td><td>Is there <i>any</i> gap toward zero?</td><td class="num">60%</td><td class="num">72.5%</td><td>Flags trivial gaps. Not usable.</td></tr>
+<tr><td><b>Margin test</b></td><td>Is it shrunk by <i>more than 10%</i>?</td><td class="num"><b>1.5%</b></td><td class="num">62%</td><td><b>Only test that keeps its error rate.</b></td></tr>
+<tr><td>Rectifier test</td><td>Same, but the error bar accounts for both methods using the same data</td><td class="num">11.7%</td><td class="num">77.9%</td><td>Most powerful, and almost never fooled by a bad AIPW (0.1% vs 93% for the z-test), but over-flags at the boundary.</td></tr>
+</table>
+
+<h2>4. What it all means</h2>
+<div class="box teal"><b class="lab">The answer to our question</b>
+On our simulators, <b>CausalPFN does not shrink large effects</b>, and we know why: rescaling passes the size straight through. Its real weakness is the opposite of what we feared: at small effects it <b>under-corrects confounding</b>, which usually makes answers too large.</div>
+<div class="box pink"><b class="lab">What we contribute beyond “it doesn't shrink”</b>
+<ol style="margin-bottom:0">
+  <li>A warning for auditors: the standard scale and shift checks pass automatically for this model, so they prove nothing.</li>
+  <li>A <b>planted-effect self-test</b> that measures how much confounding a model removes, on real data, with no reference and no ground truth.</li>
+  <li>Evidence that the <b>reference estimator is the usual point of failure</b> in detectors like this. A bad AIPW produced up to 93% false alarms.</li>
+  <li>A <b>margin test</b> that keeps its false-alarm rate, plus an honest map of when each test works.</li>
+  <li>A GPU pipeline that batches many datasets into one pass: 1,440 datasets in 29 minutes on a free Colab T4.</li>
+</ol></div>
+
+<h2 class="pb">5. Review: where the project stands</h2>
+<p>Written as a reviewer would see it. The goal is to know what to fix before presenting or submitting.</p>
+
+<h3>Strengths</h3>
+<ul>
+  <li><b>It tried to prove itself wrong.</b> Finding that the round 1–3 test could not fail, and redesigning it, is the most valuable step in the project.</li>
+  <li><b>Mechanism, not just numbers.</b> The rescaling explanation accounts for all the main observations: no shrinkage, small-effect error, and vacuous sanity checks.</li>
+  <li><b>Positive and negative controls.</b> Known shrinkage, a broken reference, and a real shrinker (a ridge model, flagged 62–65% of the time) were all tested.</li>
+  <li><b>Honest reporting.</b> Caveats are stated, old results were kept rather than overwritten, and the AIPW failure was reported instead of hidden.</li>
+</ul>
+
+<h3>Weaknesses, most important first</h3>
+<table class="grade">
+<tr><th>Issue</th><th>Why it matters / what to do</th></tr>
+<tr><td>1. Simulated data only</td><td>Every result comes from 4 simulators with 6 features. A reviewer will ask about real data. The planted self-test does not need ground truth, so it can run on standard benchmarks (IHDP, ACIC, LaLonde) right away.</td></tr>
+<tr><td>2. The detector looks in the wrong direction</td><td>CausalPFN's actual failure is under-adjusting, which mostly <i>inflates</i> answers (100 runs too large vs 18 too small). A one-sided shrinkage test misses this. A two-sided margin (equivalence) test would catch both.</td></tr>
+<tr><td>3. No real model that shrinks</td><td>The positive controls are stand-ins with planted shrinkage. Do-PFN and CausalFM, where shrinkage has been reported, would show whether the detector catches the real thing.</td></tr>
+<tr><td>4. The AIPW fix is flattering</td><td>The adopted propensity model matches the simulator. Results should be repeated with a generic, calibrated model.</td></tr>
+<tr><td>5. Rectifier test not run on the real model</td><td>Per-person CausalPFN predictions were not saved, so the most powerful test only has results on stand-ins. It also over-flags at the 10% boundary (11.7%).</td></tr>
+<tr><td>6. Narrow sizes</td><td>Only 500 and 2,000 people. Above 1,024 per group CausalPFN switches to a different internal path that was barely tested.</td></tr>
+<tr><td>7. Small self-test sample</td><td>CausalPFN's 96% comes from 80 datasets (800 for the other methods).</td></tr>
+<tr><td>8. Low power at small effects</td><td>Where errors actually happen (effect 1), the margin test catches only 31% of runs shrunk by 30%.</td></tr>
+</table>
+
+<h3>Overall assessment</h3>
+<table class="grade">
+<tr><td>As a course project</td><td>Strong. Clear question, careful method, a real finding with an explanation, and self-correction.</td></tr>
+<tr><td>As a research paper</td><td>A workshop-level negative result with a method contribution. Not yet a journal paper: it needs real-data results (issue 1) and a real shrinking model (issue 3). The earlier novelty check rated the redesigned work 6.5 / 10, “moderate innovation”.</td></tr>
+<tr><td>Best framing</td><td>Not “CausalPFN doesn't shrink”, but <b>“how to audit a causal foundation model: which checks are vacuous, why the reference fails, and a self-test that works without ground truth.”</b></td></tr>
+</table>
+
+<h3>Suggested next steps, in order</h3>
+<ol>
+  <li>Run the planted self-test and margin test on IHDP and ACIC (no new method needed).</li>
+  <li>Make the margin test two-sided, so it also flags under-adjustment.</li>
+  <li>Save per-person predictions and recompute the rectifier test on the real model.</li>
+  <li>Add Do-PFN or CausalFM as a real positive control.</li>
+  <li>Repeat the reference with a generic propensity model, and add sample sizes above 2,048.</li>
+  <li>Future scope: once shrinkage or under-adjustment is detected, correct it (debiasing) rather than only flag it.</li>
+</ol>
+
+<p class="muted" style="margin-top:14px">Sources: results/round4 (round4_C_anchor.csv, round4_C_anchor_v2.csv, round4_D_controls.csv, round4_F_reference_failure.csv, round4_P_planted_controls.csv, round4_P2_plant_fixed.csv, round4_M_metamorphic.csv). CausalPFN 0.1.5. All figures computed directly from these files.</p>
+</body>
+</html>
